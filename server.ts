@@ -65,6 +65,9 @@ function fromBase64ToUint8Array(base64String): Uint8Array {
 
 const app = new Hono()
 
+const passkeyRepo = new PasskeyRepository()
+const domainNameCache = new InMemoryCache()
+
 app.use("*", logger())
 
 app.use("*", cors({ credentials: true, origin: (origin) => origin || "*" }))
@@ -77,17 +80,18 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
     const { username } = await c.req.json<{ username: string }>()
 
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainNameCache = new InMemoryCache()
+    console.time("getPasskeyDomainByProjectId")
     let domainName = await domainNameCache.get(projectId)
     if (!domainName) {
         domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
         await domainNameCache.set(projectId, domainName)
     }
+    console.timeEnd("getPasskeyDomainByProjectId")
 
     const userID = uuidv4()
 
+    console.time("generateRegistrationOptions")
     const options = await generateRegistrationOptions({
         rpName: domainName,
         rpID: domainName,
@@ -100,11 +104,15 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
             authenticatorAttachment: "platform"
         }
     })
+    console.timeEnd("generateRegistrationOptions")
 
+    console.time("set")
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
         expireIn: CHALLENGE_TTL
     })
+    console.timeEnd("set")
 
+    console.time("setSignedCookie")
     await setSignedCookie(c, "userId", userID, SECRET, {
         httpOnly: true,
         secure: true,
@@ -112,6 +120,7 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         path: "/",
         maxAge: CHALLENGE_TTL
     })
+    console.timeEnd("setSignedCookie")
 
     return c.json(options)
 })
@@ -127,8 +136,6 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
 
     const userId = await getSignedCookie(c, SECRET, "userId")
     if (!userId) return new Response("Unauthorized", { status: 401 })
-
-    const passkeyRepo = new PasskeyRepository()
 
     const domainName = await passkeyRepo.getPasskeyDomainByProjectId(
         c.req.param("projectId")
@@ -192,9 +199,7 @@ app.get("/v1/health", (c) => c.json({ status: "ok" }))
 
 app.post("/api/v2/:projectId/login/options", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainNameCache = new InMemoryCache()
     let domainName = await domainNameCache.get(projectId)
     if (!domainName) {
         domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
@@ -215,9 +220,7 @@ app.post("/api/v2/:projectId/login/options", async (c) => {
 
 app.post("/api/v2/:projectId/login/verify", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainNameCache = new InMemoryCache()
     let domainName = await domainNameCache.get(projectId)
     if (!domainName) {
         domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
@@ -295,9 +298,7 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
 
 app.post("/api/v2/:projectId/sign-initiate", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainNameCache = new InMemoryCache()
     let domainName = await domainNameCache.get(projectId)
     if (!domainName) {
         domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
@@ -357,9 +358,7 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
 
 app.post("/api/v2/:projectId/sign-verify", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainNameCache = new InMemoryCache()
     let domainName = await domainNameCache.get(projectId)
     if (!domainName) {
         domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)

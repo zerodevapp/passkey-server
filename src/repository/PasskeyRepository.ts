@@ -52,7 +52,6 @@ class PasskeyRepository {
       FROM project_passkey
       WHERE project_id = ${projectId}
     `)
-        console.log({ result })
         if (!result) {
             // if no passkey domain is found, return localhost
             return "localhost"
