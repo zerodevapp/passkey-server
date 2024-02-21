@@ -2,12 +2,12 @@ import {
     generateAuthenticationOptions,
     generateRegistrationOptions,
     verifyAuthenticationResponse,
-    verifyRegistrationResponse
+    verifyRegistrationResponse,
 } from "@simplewebauthn/server"
 import type {
     AuthenticationResponseJSON,
     Base64URLString,
-    RegistrationResponseJSON
+    RegistrationResponseJSON,
 } from "@simplewebauthn/typescript-types"
 import { jwtVerify, SignJWT } from "jose"
 import { Hono } from "hono"
@@ -15,42 +15,13 @@ import { getSignedCookie, setSignedCookie } from "hono/cookie"
 import { serveStatic } from "hono/bun"
 import { logger } from "hono/logger"
 import { cors } from "hono/cors"
-import { z } from "zod"
-import {
-    parseMakeCredAuthData,
-    parseCreateResponse,
-    parseSignResponse,
-    derKeytoContractFriendlyKey,
-    parseAndNormalizeSig,
-    uint8ArrayToHexString,
-    findQuoteIndices,
-    convertBase64PublicKeyToXY,
-    splitECDSASignature,
-    b64ToBytes
-} from "./utils"
-import { AuthenticatorDevice } from "@simplewebauthn/typescript-types"
-import { base64URLStringToBuffer } from "@simplewebauthn/browser"
-import { encodeAbiParameters } from "viem"
 import PasskeyRepository from "./src/repository/PasskeyRepository"
 
-// TODO: make the key more unique
-
 // CONSTANTS
-
 const SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "development")
-// const RP_ID = process.env.WEBAUTHN_RP_ID ?? "localhost"
-// const RP_NAME = process.env.WEBAUTHN_RP_NAME ?? "Bun Passkeys Demo"
 const CHALLENGE_TTL = Number(process.env.WEBAUTHN_CHALLENGE_TTL) || 60_000
 
 // UTILS
-const registerOptionsSchema = z.object({
-    username: z.string().min(1)
-})
-
-const registerVerifySchema = z.object({
-    username: z.string().min(1)
-})
-
 function generateJWT(userId: string) {
     return new SignJWT({ userId })
         .setProtectedHeader({ alg: "HS256" })
@@ -72,69 +43,6 @@ function generateRandomID() {
         .replace(/\+/g, "-")
         .replace(/\//g, "_")
         .replace(/=/g, "")
-}
-
-const authenticatorDevice = {
-    credentialID: new Uint8Array(),
-    credentialPublicKey: new Uint8Array(),
-    counter: 0
-}
-
-async function recoverPublicKeyFromSignature(
-    cred: AuthenticationResponseJSON
-): Promise<string | null> {
-    try {
-        const verification = await verifyAuthenticationResponse({
-            response: cred,
-            expectedChallenge: cred.response.clientDataJSON,
-            expectedOrigin: "the expected origin",
-            expectedRPID: RP_ID,
-            authenticator: authenticatorDevice
-        })
-
-        if (verification.verified && verification.authenticationInfo) {
-            const { signature, authenticatorData } = cred.response
-            const { credentialPublicKey } = authenticatorDevice
-
-            const publicKey = await crypto.subtle.importKey(
-                "raw",
-                credentialPublicKey,
-                {
-                    name: "ECDSA",
-                    namedCurve: "P-256"
-                },
-                true,
-                ["verify"]
-            )
-
-            const signatureArray = base64urlToUint8Array(signature)
-            const authenticatorDataArray =
-                base64urlToUint8Array(authenticatorData)
-
-            const result = await crypto.subtle.verify(
-                {
-                    name: "ECDSA",
-                    hash: "SHA-256"
-                },
-                publicKey,
-                signatureArray,
-                authenticatorDataArray
-            )
-
-            if (result) {
-                return btoa(
-                    String.fromCharCode(
-                        ...Array.from(
-                            new Uint8Array(credentialPublicKey.buffer, 27, 65)
-                        )
-                    )
-                )
-            }
-        }
-    } catch (error) {
-        console.error(error)
-    }
-    return null
 }
 
 function base64urlToUint8Array(base64url: string): Uint8Array {
@@ -186,36 +94,6 @@ app.get("/index.js", serveStatic({ path: "./index.js" }))
 
 app.get("/", serveStatic({ path: "./index.html" }))
 
-// app.get("/dummy-signature/:userId", async (c) => {
-//     const userId = c.req.param("userId")
-
-//     // Ensure the userId is provided
-//     if (!userId) {
-//         return c.text("User ID is required", 400)
-//     }
-
-//     // Retrieve the dummy signature from the KV store
-//     const dummySignatureData = await kv.get<string>(["dummySignature", userId])
-
-//     // Check if the dummy signature exists
-//     if (!dummySignatureData) { // Don't need to use .value
-//         return c.text("Dummy signature not found", 404)
-//     }
-
-//     // Return the dummy signature to the client
-//     return c.json({ dummySignature: dummySignatureData.value })
-// })
-
-// // Add new endpoint to process and display data
-// app.post("/process-authentication", async (c) => {
-//     const { cred } = await c.req.json()
-//     const parsedData = parseSignResponse(cred)
-//     const { r, s } = parseAndNormalizeSig(parsedData.derSig)
-//     const [x, y] = derKeytoContractFriendlyKey(parseCreateResponse(cred))
-
-//     return c.json({ r: r.toString(), s: s.toString(), x, y })
-// })
-
 app.post("/api/v2/:projectId/register/options", async (c) => {
     const { username } = await c.req.json<{ username: string }>()
 
@@ -235,14 +113,12 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         authenticatorSelection: {
             residentKey: "required",
             userVerification: "required",
-            authenticatorAttachment: "platform"
-        }
+            authenticatorAttachment: "platform",
+        },
     })
 
-    console.log({ options })
-
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
-        expireIn: CHALLENGE_TTL
+        expireIn: CHALLENGE_TTL,
     })
 
     await setSignedCookie(c, "userId", userID, SECRET, {
@@ -250,24 +126,11 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         secure: true,
         sameSite: "None",
         path: "/",
-        maxAge: CHALLENGE_TTL
+        maxAge: CHALLENGE_TTL,
     })
 
     return c.json(options)
 })
-
-// app.get("/public-key/:credentialId", async (c) => {
-//     const credentialId = c.req.param("credentialId")
-//     const user = await kv.get<User>(["credentials", credentialId])
-//     if (!user.value) return c.text("Credential not found", 404)
-
-//     const publicKey = user.value.credentials[credentialId].credentialPublicKey
-//     const publicKeyBase64 = btoa(
-//         String.fromCharCode(...new Uint8Array(publicKey.buffer))
-//     )
-
-//     return c.json({ publicKey: publicKeyBase64 })
-// })
 
 app.post("/api/v2/:projectId/register/verify", async (c) => {
     // const validationResult = registerVerifySchema.safeParse(c.body)
@@ -297,7 +160,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
     const challenge = await passkeyRepo.get([
         "challenges",
         domainName,
-        clientData.challenge
+        clientData.challenge,
     ])
 
     if (!challenge) {
@@ -309,7 +172,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
         expectedChallenge: clientData.challenge,
         expectedRPID: domainName,
         expectedOrigin: c.req.header("origin")!, //! Allow from any origin
-        requireUserVerification: true
+        requireUserVerification: true,
     })
 
     if (verification.verified) {
@@ -327,9 +190,9 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
                     credentialID: uint8ArrayToBase64(credentialID),
                     credentialPublicKey:
                         uint8ArrayToBase64(credentialPublicKey),
-                    counter
-                }
-            }
+                    counter,
+                },
+            },
         } as User)
 
         await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
@@ -337,7 +200,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
             secure: true,
             sameSite: "None",
             path: "/",
-            maxAge: 600_000
+            maxAge: 600_000,
         })
 
         return c.json(verification)
@@ -356,11 +219,11 @@ app.post("/api/v2/:projectId/login/options", async (c) => {
 
     const options = await generateAuthenticationOptions({
         userVerification: "required",
-        rpID: domainName
+        rpID: domainName,
     })
 
     await passkeyRepo.set(["challenges", domainName, options.challenge], true, {
-        expireIn: CHALLENGE_TTL
+        expireIn: CHALLENGE_TTL,
     })
 
     return c.json(options)
@@ -377,7 +240,6 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
     const clientData = JSON.parse(atob(cred.response.clientDataJSON))
 
     const clientDataJSON = atob(cred.response.clientDataJSON)
-    console.log({ clientData })
     if (typeof clientDataJSON !== "string") {
         throw new Error("clientDataJSON must be a string")
     }
@@ -387,12 +249,11 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
 
     const user = await passkeyRepo.get<User>(["users", domainName, userId])
     if (!user) return c.json({ error: "Unauthorized" }, { status: 401 })
-    console.log({ user })
 
     const challenge = await passkeyRepo.get<Challenge>([
         "challenges",
         domainName,
-        clientData.challenge
+        clientData.challenge,
     ])
     if (!challenge) {
         return c.text("Invalid challenge", 400)
@@ -416,8 +277,8 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
         authenticator: {
             ...credential,
             credentialID: credentialID,
-            credentialPublicKey: credentialPublicKey
-        }
+            credentialPublicKey: credentialPublicKey,
+        },
     })
 
     if (verification.verified) {
@@ -429,7 +290,7 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
         newUser.credentials[cred.id].counter = newCounter
 
         await passkeyRepo.set(["users", domainName, userId], newUser, {
-            overwrite: true
+            overwrite: true,
         })
 
         await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
@@ -437,12 +298,12 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
             secure: true,
             sameSite: "None",
             path: "/",
-            maxAge: 600_000
+            maxAge: 600_000,
         })
 
         return c.json({
             verification,
-            pubkey: user.credentials[cred.id].pubKey
+            pubkey: user.credentials[cred.id].pubKey,
         })
     }
     return c.text("Unauthorized", 401)
@@ -462,11 +323,9 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
     const user = await passkeyRepo.get<User>([
         "users",
         domainName,
-        result.payload.userId as string
+        result.payload.userId as string,
     ])
     if (!user) return new Response("Unauthorized", { status: 401 })
-
-    console.log("user", user)
 
     // Utility function to convert hex string to Uint8Array
     function hexStringToUint8Array(hexString: string): Uint8Array {
@@ -486,7 +345,7 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
     const transformedCredentials = credentialsArray.map((cred) => ({
         ...cred,
         credentialID: fromBase64ToUint8Array(cred.credentialID),
-        credentialPublicKey: fromBase64ToUint8Array(cred.credentialPublicKey)
+        credentialPublicKey: fromBase64ToUint8Array(cred.credentialPublicKey),
     }))
 
     const options = await generateAuthenticationOptions({
@@ -495,16 +354,14 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
         rpID: domainName,
         allowCredentials: transformedCredentials.map((cred) => ({
             id: cred.credentialID,
-            type: "public-key"
-        }))
+            type: "public-key",
+        })),
     })
 
     await passkeyRepo.set(["challenges", domainName, options.challenge], data, {
         expireIn: CHALLENGE_TTL,
-        overwrite: true
+        overwrite: true,
     })
-
-    console.log("options", options)
 
     return c.json(options)
 })
@@ -520,18 +377,16 @@ app.post("/api/v2/:projectId/sign-verify", async (c) => {
     const challenge = await passkeyRepo.get<string>([
         "challenges",
         domainName,
-        clientData.challenge
+        clientData.challenge,
     ])
     if (!challenge) return c.text("Invalid challenge", 400)
 
     const user = await passkeyRepo.get<User>([
         "users",
         domainName,
-        cred.response.userHandle as string
+        cred.response.userHandle as string,
     ])
     if (!user) return c.text("Unauthorized", 401)
-
-    console.log("cred", cred)
 
     const credential = user.credentials[cred.id]
 
@@ -551,8 +406,8 @@ app.post("/api/v2/:projectId/sign-verify", async (c) => {
         authenticator: {
             ...credential,
             credentialID: credentialID,
-            credentialPublicKey: credentialPublicKey
-        }
+            credentialPublicKey: credentialPublicKey,
+        },
     })
 
     if (verification.verified) {
@@ -571,35 +426,17 @@ app.post("/api/v2/:projectId/sign-verify", async (c) => {
             signedData: challenge,
             signature,
             authenticatorData,
-            publicKeyBase64
+            publicKeyBase64,
         })
     } else {
         return c.text("Unauthorized", 401)
     }
 })
 
-// app.get("/private", async (c) => {
-//     const token = await getSignedCookie(c, SECRET, "token")
-//     if (!token) return new Response("Unauthorized", { status: 401 })
-//     console.log({ token })
-
-//     const result = await verifyJWT(token)
-//     console.log({ result })
-
-//     const user = await kv.get<User>(["users", result.payload.userId as string])
-//     if (!user.value) return new Response("Unauthorized", { status: 401 })
-
-//     return c.json({
-//         id: result.payload.userId,
-//         username: user.value.username || "Anon",
-//         data: user.value.data
-//     })
-// })
-
 // health check
 app.get("/health", (c) => c.json({ status: "ok" }))
 
 Bun.serve({
     port: 8080, // defaults to $BUN_PORT, $PORT, $NODE_PORT otherwise 3000
-    fetch: app.fetch
+    fetch: app.fetch,
 })
