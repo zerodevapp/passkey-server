@@ -7,6 +7,6 @@ export const credentialObject = extendApi(
         passkeyUserId: z.string(),
         publicKey: z.string(),
         counter: z.number(),
-        pub_key: z.string()
+        pubKey: z.string()
     })
 )

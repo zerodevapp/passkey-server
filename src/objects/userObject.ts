@@ -5,6 +5,6 @@ export const userObject = extendApi(
     z.object({
         passkeyUserId: z.string(),
         username: z.string(),
-        data: z.string(),
+        projectId: z.string()
     })
 )

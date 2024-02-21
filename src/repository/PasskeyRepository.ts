@@ -60,18 +60,29 @@ class PasskeyRepository {
         return getDomainFromUrl(result.passkeyDomain)
     }
 
-    async createUser(user: { userId: string; username: string; data: string }) {
-        const { userId, username, data } = user;
+    async createUser(user: {
+        userId: string
+        username: string
+        projectId: string
+    }) {
+        const isValidUUID =
+            /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+                user.userId
+            )
+        if (!isValidUUID) {
+            throw new Error("Invalid UUID format for userId")
+        }
+
         try {
             await (
                 await db
-            ).query(sql.typeAlias('void')`
-                INSERT INTO passkey_users (passkey_user_id, username, data)
-                VALUES (${userId}, ${username}, ${data})
-            `);
+            ).query(sql.typeAlias("void")`
+                INSERT INTO passkey_users (passkey_user_id, username, project_id)
+                VALUES (${user.userId}, ${user.username}, ${user.projectId})
+            `)
         } catch (error) {
-            console.error("Error creating user:", error);
-            throw error;
+            console.error("Error creating user:", error)
+            throw error
         }
     }
 
@@ -81,26 +92,38 @@ class PasskeyRepository {
                 await db
             ).maybeOne(sql.type(userObject)`
                 SELECT * FROM passkey_users WHERE passkey_user_id = ${userId}
-            `);
-            return user;
+            `)
+            return user
         } catch (error) {
-            console.error("Error retrieving user:", error);
-            return null;
+            console.error("Error retrieving user:", error)
+            return null
         }
     }
 
-    async createCredential(credential: { credentialId: string; userId: string; credentialPublicKey: string; counter: number, publicKey: string }) {
-        const { credentialId, userId, publicKey, counter } = credential;
+    async createCredential(credential: {
+        credentialId: string
+        userId: string
+        credentialPublicKey: string
+        counter: number
+        publicKey: string
+    }) {
+        const {
+            credentialId,
+            userId,
+            credentialPublicKey,
+            counter,
+            publicKey
+        } = credential
         try {
             await (
                 await db
-            ).query(sql.typeAlias('void')`
+            ).query(sql.typeAlias("void")`
                 INSERT INTO passkey_credentials (credential_id, passkey_user_id, public_key, counter, pub_key)
-                VALUES (${credentialId}, ${userId}, ${publicKey}, ${counter})
-            `);
+                VALUES (${credentialId}, ${userId}, ${credentialPublicKey}, ${counter}, ${publicKey})
+            `)
         } catch (error) {
-            console.error("Error creating credential:", error);
-            throw error;
+            console.error("Error creating credential:", error)
+            throw error
         }
     }
 
@@ -110,11 +133,25 @@ class PasskeyRepository {
                 await db
             ).maybeOne(sql.type(credentialObject)`
                 SELECT * FROM passkey_credentials WHERE credential_id = ${credentialId}
-            `);
-            return credential;
+            `)
+            return credential
         } catch (error) {
-            console.error("Error retrieving credential:", error);
-            return null;
+            console.error("Error retrieving credential:", error)
+            return null
+        }
+    }
+
+    async getCredentialsByUserId(userId: string) {
+        try {
+            const credentials = await (
+                await db
+            ).any(sql.type(credentialObject)`
+                SELECT * FROM passkey_credentials WHERE passkey_user_id = ${userId}
+            `)
+            return credentials
+        } catch (error) {
+            console.error("Error retrieving credentials:", error)
+            return []
         }
     }
 
@@ -122,12 +159,12 @@ class PasskeyRepository {
         try {
             await (
                 await db
-            ).query(sql.typeAlias('void')`
+            ).query(sql.typeAlias("void")`
                 UPDATE passkey_credentials SET counter = ${newCounter} WHERE credential_id = ${credentialId}
-            `);
+            `)
         } catch (error) {
-            console.error("Error updating credential counter:", error);
-            throw error;
+            console.error("Error updating credential counter:", error)
+            throw error
         }
     }
 }
