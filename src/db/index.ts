@@ -18,6 +18,7 @@ const interceptors = [
 ]
 
 const db = createPool(process.env.DB_URL!, {
+    interceptors,
     ssl:
         process.env.NODE_ENV === "development"
             ? {
