@@ -84,7 +84,9 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
     console.time("getPasskeyDomainByProjectId")
     let domainName = await domainNameCache.get(projectId)
     if (!domainName) {
+        console.log("cache miss")
         domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+        console.log("got domain name", domainName)
         await domainNameCache.set(projectId, domainName)
     }
     console.timeEnd("getPasskeyDomainByProjectId")
