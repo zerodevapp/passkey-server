@@ -2,12 +2,11 @@ import {
     generateAuthenticationOptions,
     generateRegistrationOptions,
     verifyAuthenticationResponse,
-    verifyRegistrationResponse,
+    verifyRegistrationResponse
 } from "@simplewebauthn/server"
 import type {
     AuthenticationResponseJSON,
-    Base64URLString,
-    RegistrationResponseJSON,
+    RegistrationResponseJSON
 } from "@simplewebauthn/typescript-types"
 import { jwtVerify, SignJWT } from "jose"
 import { Hono } from "hono"
@@ -15,7 +14,10 @@ import { getSignedCookie, setSignedCookie } from "hono/cookie"
 import { serveStatic } from "hono/bun"
 import { logger } from "hono/logger"
 import { cors } from "hono/cors"
+import { v4 as uuidv4 } from "uuid"
 import PasskeyRepository from "./src/repository/PasskeyRepository"
+import { Challenge } from "./src/types"
+import { InMemoryCache } from "./src/cache/inMemoryCache"
 
 // CONSTANTS
 const SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "development")
@@ -32,19 +34,6 @@ function verifyJWT(token: string) {
     return jwtVerify(token, SECRET)
 }
 
-function generateRandomID() {
-    const id = crypto.getRandomValues(new Uint8Array(32))
-
-    return btoa(
-        Array.from(id)
-            .map((c) => String.fromCharCode(c))
-            .join("")
-    )
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=/g, "")
-}
-
 function base64urlToUint8Array(base64url: string): Uint8Array {
     const padding = "=".repeat((4 - (base64url.length % 4)) % 4)
     const base64 = (base64url + padding).replace(/\-/g, "+").replace(/_/g, "/")
@@ -59,32 +48,25 @@ function base64urlToUint8Array(base64url: string): Uint8Array {
     return outputArray
 }
 
-function uint8ArrayToBase64(uint8Array: Uint8Array): string {
-    return Buffer.from(uint8Array).toString("base64")
+function uint8ArrayToBase64Url(uint8Array: Uint8Array): string {
+    const base64String = Buffer.from(uint8Array).toString("base64")
+    const base64UrlString = base64String
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "")
+    return base64UrlString
 }
 
 function fromBase64ToUint8Array(base64String): Uint8Array {
     return Uint8Array.from(Buffer.from(base64String, "base64"))
 }
 
-type User = {
-    username: string
-    data: string
-    credentials: Record<string, Credential>
-}
-
-type Credential = {
-    pubKey?: string
-    credentialID: Base64URLString // serialize to handle Uint8Array in Redis
-    credentialPublicKey: Base64URLString // serialize to handle Uint8Array in Redis
-    counter: number
-}
-
-type Challenge = boolean
-
 // RP SERVER
 
 const app = new Hono()
+
+const passkeyRepo = new PasskeyRepository()
+const domainNameCache = new InMemoryCache()
 
 app.use("*", logger())
 
@@ -98,12 +80,18 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
     const { username } = await c.req.json<{ username: string }>()
 
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+    console.time("getPasskeyDomainByProjectId")
+    let domainName = await domainNameCache.get(projectId)
+    if (!domainName) {
+        domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+        await domainNameCache.set(projectId, domainName)
+    }
+    console.timeEnd("getPasskeyDomainByProjectId")
 
-    const userID = generateRandomID()
+    const userID = uuidv4()
 
+    console.time("generateRegistrationOptions")
     const options = await generateRegistrationOptions({
         rpName: domainName,
         rpID: domainName,
@@ -113,31 +101,31 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         authenticatorSelection: {
             residentKey: "required",
             userVerification: "required",
-            authenticatorAttachment: "platform",
-        },
+            authenticatorAttachment: "platform"
+        }
     })
+    console.timeEnd("generateRegistrationOptions")
 
+    console.time("set")
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
-        expireIn: CHALLENGE_TTL,
+        expireIn: CHALLENGE_TTL
     })
+    console.timeEnd("set")
 
+    console.time("setSignedCookie")
     await setSignedCookie(c, "userId", userID, SECRET, {
         httpOnly: true,
         secure: true,
         sameSite: "None",
         path: "/",
-        maxAge: CHALLENGE_TTL,
+        maxAge: CHALLENGE_TTL
     })
+    console.timeEnd("setSignedCookie")
 
     return c.json(options)
 })
 
 app.post("/api/v2/:projectId/register/verify", async (c) => {
-    // const validationResult = registerVerifySchema.safeParse(c.body)
-    // if (!validationResult.success) {
-    //     return c.json({ error: "Invalid request data" }, { status: 400 })
-    // }
-
     const { username, cred } = await c.req.json<{
         username: string
         cred: RegistrationResponseJSON
@@ -149,8 +137,6 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
     const userId = await getSignedCookie(c, SECRET, "userId")
     if (!userId) return new Response("Unauthorized", { status: 401 })
 
-    const passkeyRepo = new PasskeyRepository()
-
     const domainName = await passkeyRepo.getPasskeyDomainByProjectId(
         c.req.param("projectId")
     )
@@ -160,7 +146,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
     const challenge = await passkeyRepo.get([
         "challenges",
         domainName,
-        clientData.challenge,
+        clientData.challenge
     ])
 
     if (!challenge) {
@@ -172,7 +158,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
         expectedChallenge: clientData.challenge,
         expectedRPID: domainName,
         expectedOrigin: c.req.header("origin")!, //! Allow from any origin
-        requireUserVerification: true,
+        requireUserVerification: true
     })
 
     if (verification.verified) {
@@ -181,26 +167,26 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
 
         await passkeyRepo.delete(["challenges", clientData.challenge])
 
-        await passkeyRepo.set(["users", domainName, userId], {
-            username: username,
-            data: "Private user data for " + (username || "Anon"),
-            credentials: {
-                [cred.id]: {
-                    pubKey,
-                    credentialID: uint8ArrayToBase64(credentialID),
-                    credentialPublicKey:
-                        uint8ArrayToBase64(credentialPublicKey),
-                    counter,
-                },
-            },
-        } as User)
+        await passkeyRepo.createUser({
+            userId,
+            username,
+            projectId: c.req.param("projectId")
+        })
+
+        await passkeyRepo.createCredential({
+            userId,
+            credentialId: uint8ArrayToBase64Url(credentialID),
+            publicKey: pubKey,
+            counter,
+            credentialPublicKey: uint8ArrayToBase64Url(credentialPublicKey)
+        })
 
         await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
             httpOnly: true,
             secure: true,
             sameSite: "None",
             path: "/",
-            maxAge: 600_000,
+            maxAge: 600_000
         })
 
         return c.json(verification)
@@ -213,17 +199,20 @@ app.get("/v1/health", (c) => c.json({ status: "ok" }))
 
 app.post("/api/v2/:projectId/login/options", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+    let domainName = await domainNameCache.get(projectId)
+    if (!domainName) {
+        domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+        await domainNameCache.set(projectId, domainName)
+    }
 
     const options = await generateAuthenticationOptions({
         userVerification: "required",
-        rpID: domainName,
+        rpID: domainName
     })
 
     await passkeyRepo.set(["challenges", domainName, options.challenge], true, {
-        expireIn: CHALLENGE_TTL,
+        expireIn: CHALLENGE_TTL
     })
 
     return c.json(options)
@@ -231,9 +220,12 @@ app.post("/api/v2/:projectId/login/options", async (c) => {
 
 app.post("/api/v2/:projectId/login/verify", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+    let domainName = await domainNameCache.get(projectId)
+    if (!domainName) {
+        domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+        await domainNameCache.set(projectId, domainName)
+    }
 
     const { cred } = await c.req.json<{ cred: AuthenticationResponseJSON }>()
 
@@ -247,26 +239,26 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
     const userId = cred.response.userHandle
     if (!userId) return c.json({ error: "Unauthorized" }, { status: 401 })
 
-    const user = await passkeyRepo.get<User>(["users", domainName, userId])
+    const user = await passkeyRepo.getPasskeyUserById(userId)
+    const credential = await passkeyRepo.getCredentialById(cred.id)
     if (!user) return c.json({ error: "Unauthorized" }, { status: 401 })
+    if (!credential) return c.json({ error: "Unauthorized" }, { status: 401 })
 
     const challenge = await passkeyRepo.get<Challenge>([
         "challenges",
         domainName,
-        clientData.challenge,
+        clientData.challenge
     ])
     if (!challenge) {
         return c.text("Invalid challenge", 400)
     }
 
-    const credential = user.credentials[cred.id]
-
-    // Convert from Base64 to Uint8Array
+    // Convert from Base64url to Uint8Array
     const credentialID = base64urlToUint8Array(
-        credential.credentialID as string
+        credential.credentialId as string
     )
     const credentialPublicKey = base64urlToUint8Array(
-        credential.credentialPublicKey as string
+        credential.publicKey as string
     )
 
     const verification = await verifyAuthenticationResponse({
@@ -277,8 +269,8 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
         authenticator: {
             ...credential,
             credentialID: credentialID,
-            credentialPublicKey: credentialPublicKey,
-        },
+            credentialPublicKey: credentialPublicKey
+        }
     })
 
     if (verification.verified) {
@@ -286,24 +278,19 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
 
         await passkeyRepo.delete(["challenges", clientData.challenge])
 
-        const newUser = user
-        newUser.credentials[cred.id].counter = newCounter
-
-        await passkeyRepo.set(["users", domainName, userId], newUser, {
-            overwrite: true,
-        })
+        await passkeyRepo.updateCredentialCounter(cred.id, newCounter)
 
         await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
             httpOnly: true,
             secure: true,
             sameSite: "None",
             path: "/",
-            maxAge: 600_000,
+            maxAge: 600_000
         })
 
         return c.json({
             verification,
-            pubkey: user.credentials[cred.id].pubKey,
+            pubkey: credential.pubKey
         })
     }
     return c.text("Unauthorized", 401)
@@ -311,21 +298,26 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
 
 app.post("/api/v2/:projectId/sign-initiate", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+    let domainName = await domainNameCache.get(projectId)
+    if (!domainName) {
+        domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+        await domainNameCache.set(projectId, domainName)
+    }
 
     const { data } = await c.req.json<{ data: string }>()
     const token = await getSignedCookie(c, SECRET, "token")
     if (!token) return new Response("Unauthorized", { status: 401 })
 
     const result = await verifyJWT(token)
-    const user = await passkeyRepo.get<User>([
-        "users",
-        domainName,
-        result.payload.userId as string,
-    ])
+    const user = await passkeyRepo.getPasskeyUserById(
+        result.payload.userId as string
+    )
     if (!user) return new Response("Unauthorized", { status: 401 })
+    const credentials = await passkeyRepo.getCredentialsByUserId(
+        result.payload.userId as string
+    )
+    if (!credentials) return new Response("Unauthorized", { status: 401 })
 
     // Utility function to convert hex string to Uint8Array
     function hexStringToUint8Array(hexString: string): Uint8Array {
@@ -340,12 +332,10 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
     // Convert data (hex string) to Uint8Array
     const dataUint8Array = hexStringToUint8Array(data)
 
-    const credentialsArray = Object.values(user.credentials)
-
-    const transformedCredentials = credentialsArray.map((cred) => ({
+    const transformedCredentials = credentials.map((cred) => ({
         ...cred,
-        credentialID: fromBase64ToUint8Array(cred.credentialID),
-        credentialPublicKey: fromBase64ToUint8Array(cred.credentialPublicKey),
+        credentialID: fromBase64ToUint8Array(cred.credentialId),
+        credentialPublicKey: fromBase64ToUint8Array(cred.publicKey)
     }))
 
     const options = await generateAuthenticationOptions({
@@ -354,13 +344,13 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
         rpID: domainName,
         allowCredentials: transformedCredentials.map((cred) => ({
             id: cred.credentialID,
-            type: "public-key",
-        })),
+            type: "public-key"
+        }))
     })
 
     await passkeyRepo.set(["challenges", domainName, options.challenge], data, {
         expireIn: CHALLENGE_TTL,
-        overwrite: true,
+        overwrite: true
     })
 
     return c.json(options)
@@ -368,34 +358,35 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
 
 app.post("/api/v2/:projectId/sign-verify", async (c) => {
     const projectId = c.req.param("projectId")
-    const passkeyRepo = new PasskeyRepository()
 
-    const domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+    let domainName = await domainNameCache.get(projectId)
+    if (!domainName) {
+        domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+        await domainNameCache.set(projectId, domainName)
+    }
 
     const { cred } = await c.req.json<{ cred: AuthenticationResponseJSON }>()
     const clientData = JSON.parse(atob(cred.response.clientDataJSON))
     const challenge = await passkeyRepo.get<string>([
         "challenges",
         domainName,
-        clientData.challenge,
+        clientData.challenge
     ])
     if (!challenge) return c.text("Invalid challenge", 400)
 
-    const user = await passkeyRepo.get<User>([
-        "users",
-        domainName,
-        cred.response.userHandle as string,
-    ])
+    const user = await passkeyRepo.getPasskeyUserById(
+        cred.response.userHandle as string
+    )
     if (!user) return c.text("Unauthorized", 401)
+    const credential = await passkeyRepo.getCredentialById(cred.id)
+    if (!credential) return c.text("Unauthorized", 401)
 
-    const credential = user.credentials[cred.id]
-
-    // Convert from Base64 to Uint8Array
+    // Convert from Base64url to Uint8Array
     const credentialID = base64urlToUint8Array(
-        credential.credentialID as string
+        credential.credentialId as string
     )
     const credentialPublicKey = base64urlToUint8Array(
-        credential.credentialPublicKey as string
+        credential?.publicKey as string
     )
 
     const verification = await verifyAuthenticationResponse({
@@ -406,14 +397,14 @@ app.post("/api/v2/:projectId/sign-verify", async (c) => {
         authenticator: {
             ...credential,
             credentialID: credentialID,
-            credentialPublicKey: credentialPublicKey,
-        },
+            credentialPublicKey: credentialPublicKey
+        }
     })
 
     if (verification.verified) {
         await passkeyRepo.delete(["challenges", clientData.challenge])
         const signature = cred.response.signature
-        const publicKey = user.credentials[cred.id].credentialPublicKey
+        const publicKey = credential.publicKey
         const publicKeyBase64 = btoa(
             String.fromCharCode(
                 ...new Uint8Array(base64urlToUint8Array(publicKey))
@@ -426,7 +417,7 @@ app.post("/api/v2/:projectId/sign-verify", async (c) => {
             signedData: challenge,
             signature,
             authenticatorData,
-            publicKeyBase64,
+            publicKeyBase64
         })
     } else {
         return c.text("Unauthorized", 401)
@@ -438,5 +429,5 @@ app.get("/health", (c) => c.json({ status: "ok" }))
 
 Bun.serve({
     port: 8080, // defaults to $BUN_PORT, $PORT, $NODE_PORT otherwise 3000
-    fetch: app.fetch,
+    fetch: app.fetch
 })
