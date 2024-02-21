@@ -181,19 +181,33 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
 
         await passkeyRepo.delete(["challenges", clientData.challenge])
 
-        await passkeyRepo.set(["users", domainName, userId], {
-            username: username,
-            data: "Private user data for " + (username || "Anon"),
-            credentials: {
-                [cred.id]: {
-                    pubKey,
-                    credentialID: uint8ArrayToBase64(credentialID),
-                    credentialPublicKey:
-                        uint8ArrayToBase64(credentialPublicKey),
-                    counter,
-                },
-            },
-        } as User)
+        await passkeyRepo.createUser({
+            userId,
+            username,
+            data: "Private user data for " + (username || "Anon")
+        })
+
+        await passkeyRepo.createCredential({
+            userId,
+            credentialId: uint8ArrayToBase64(credentialID),
+            publicKey: pubKey,
+            counter,
+            credentialPublicKey: uint8ArrayToBase64(credentialPublicKey),
+        })
+
+        // await passkeyRepo.set(["users", domainName, userId], {
+        //     username: username,
+        //     data: "Private user data for " + (username || "Anon"),
+        //     credentials: {
+        //         [cred.id]: {
+        //             pubKey,
+        //             credentialID: uint8ArrayToBase64(credentialID),
+        //             credentialPublicKey:
+        //                 uint8ArrayToBase64(credentialPublicKey),
+        //             counter,
+        //         },
+        //     },
+        // } as User)
 
         await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
             httpOnly: true,
