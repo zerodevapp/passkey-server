@@ -102,8 +102,7 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         userDisplayName: username,
         authenticatorSelection: {
             residentKey: "required",
-            userVerification: "required",
-            authenticatorAttachment: "platform"
+            userVerification: "required"
         }
     })
     console.timeEnd("generateRegistrationOptions")
