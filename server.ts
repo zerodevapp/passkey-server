@@ -8,9 +8,7 @@ import type {
     AuthenticationResponseJSON,
     RegistrationResponseJSON
 } from "@simplewebauthn/typescript-types"
-import { jwtVerify, SignJWT } from "jose"
 import { Hono } from "hono"
-import { getSignedCookie, setCookie, setSignedCookie } from "hono/cookie"
 import { serveStatic } from "hono/bun"
 import { logger } from "hono/logger"
 import { cors } from "hono/cors"
@@ -20,20 +18,9 @@ import { Challenge } from "./src/types"
 import { InMemoryCache } from "./src/cache/inMemoryCache"
 
 // CONSTANTS
-const SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "development")
 const CHALLENGE_TTL = Number(process.env.WEBAUTHN_CHALLENGE_TTL) || 60_000
 
 // UTILS
-function generateJWT(userId: string) {
-    return new SignJWT({ userId })
-        .setProtectedHeader({ alg: "HS256" })
-        .sign(SECRET)
-}
-
-function verifyJWT(token: string) {
-    return jwtVerify(token, SECRET)
-}
-
 function base64urlToUint8Array(base64url: string): Uint8Array {
     const padding = "=".repeat((4 - (base64url.length % 4)) % 4)
     const base64 = (base64url + padding).replace(/\-/g, "+").replace(/_/g, "/")
@@ -77,12 +64,10 @@ app.get("/index.js", serveStatic({ path: "./index.js" }))
 app.get("/", serveStatic({ path: "./index.html" }))
 
 app.post("/api/v2/:projectId/register/options", async (c) => {
-    console.log("register options")
     const { username } = await c.req.json<{ username: string }>()
 
     const projectId = c.req.param("projectId")
 
-    console.time("getPasskeyDomainByProjectId")
     let domainName = await domainNameCache.get(projectId)
     if (!domainName) {
         console.log("cache miss")
@@ -90,15 +75,13 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         console.log("got domain name", domainName)
         await domainNameCache.set(projectId, domainName)
     }
-    console.timeEnd("getPasskeyDomainByProjectId")
 
-    const userID = uuidv4()
+    const userId = uuidv4()
 
-    console.time("generateRegistrationOptions")
     const options = await generateRegistrationOptions({
         rpName: domainName,
         rpID: domainName,
-        userID,
+        userID: userId,
         userName: username,
         userDisplayName: username,
         authenticatorSelection: {
@@ -106,30 +89,17 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
             userVerification: "required"
         }
     })
-    console.timeEnd("generateRegistrationOptions")
 
-    console.time("set")
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
         expireIn: CHALLENGE_TTL
     })
-    console.timeEnd("set")
 
-    console.time("setSignedCookie")
-
-    await setSignedCookie(c, "userId", userID, SECRET, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "Lax",
-        path: "/",
-        maxAge: CHALLENGE_TTL
-    })
-    console.timeEnd("setSignedCookie")
-
-    return c.json(options)
+    return c.json({ options, userId })
 })
 
 app.post("/api/v2/:projectId/register/verify", async (c) => {
-    const { username, cred } = await c.req.json<{
+    const { userId, username, cred } = await c.req.json<{
+        userId: string
         username: string
         cred: RegistrationResponseJSON
     }>()
@@ -137,12 +107,15 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
     // base64url to Uint8Array
     const pubKey = cred.response.publicKey!
 
-    const userId = await getSignedCookie(c, SECRET, "userId")
-    if (!userId) return new Response("UserId not found", { status: 401 })
+    if (!userId) return new Response("UserId Not Found", { status: 401 })
 
-    const domainName = await passkeyRepo.getPasskeyDomainByProjectId(
-        c.req.param("projectId")
-    )
+    const projectId = c.req.param("projectId")
+
+    let domainName = await domainNameCache.get(projectId)
+    if (!domainName) {
+        domainName = await passkeyRepo.getPasskeyDomainByProjectId(projectId)
+        await domainNameCache.set(projectId, domainName)
+    }
 
     const clientData = JSON.parse(atob(cred.response.clientDataJSON))
 
@@ -182,14 +155,6 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
             publicKey: pubKey,
             counter,
             credentialPublicKey: uint8ArrayToBase64Url(credentialPublicKey)
-        })
-
-        await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
-            httpOnly: true,
-            secure: true,
-            sameSite: "Lax",
-            path: "/",
-            maxAge: 600_000
         })
 
         return c.json(verification)
@@ -283,17 +248,10 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
 
         await passkeyRepo.updateCredentialCounter(cred.id, newCounter)
 
-        await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
-            httpOnly: true,
-            secure: true,
-            sameSite: "Lax",
-            path: "/",
-            maxAge: 600_000
-        })
-
         return c.json({
             verification,
-            pubkey: credential.pubKey
+            pubkey: credential.pubKey,
+            userId
         })
     }
     return c.text("Unauthorized", 401)
@@ -308,19 +266,16 @@ app.post("/api/v2/:projectId/sign-initiate", async (c) => {
         await domainNameCache.set(projectId, domainName)
     }
 
-    const { data } = await c.req.json<{ data: string }>()
-    const token = await getSignedCookie(c, SECRET, "token")
-    if (!token) return new Response("Unauthorized", { status: 401 })
+    const { data, userId } = await c.req.json<{
+        data: string
+        userId: string
+    }>()
 
-    const result = await verifyJWT(token)
-    const user = await passkeyRepo.getPasskeyUserById(
-        result.payload.userId as string
-    )
-    if (!user) return new Response("Unauthorized", { status: 401 })
-    const credentials = await passkeyRepo.getCredentialsByUserId(
-        result.payload.userId as string
-    )
-    if (!credentials) return new Response("Unauthorized", { status: 401 })
+    const user = await passkeyRepo.getPasskeyUserById(userId)
+    if (!user) return new Response("User Not Found", { status: 401 })
+    const credentials = await passkeyRepo.getCredentialsByUserId(userId)
+    if (!credentials)
+        return new Response("Credentials Not Found", { status: 401 })
 
     // Utility function to convert hex string to Uint8Array
     function hexStringToUint8Array(hexString: string): Uint8Array {
@@ -380,9 +335,9 @@ app.post("/api/v2/:projectId/sign-verify", async (c) => {
     const user = await passkeyRepo.getPasskeyUserById(
         cred.response.userHandle as string
     )
-    if (!user) return c.text("Unauthorized", 401)
+    if (!user) return c.text("User Not Found", 401)
     const credential = await passkeyRepo.getCredentialById(cred.id)
-    if (!credential) return c.text("Unauthorized", 401)
+    if (!credential) return c.text("Credentials Not Found", 401)
 
     // Convert from Base64url to Uint8Array
     const credentialID = base64urlToUint8Array(
