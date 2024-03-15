@@ -10,7 +10,7 @@ import type {
 } from "@simplewebauthn/typescript-types"
 import { jwtVerify, SignJWT } from "jose"
 import { Hono } from "hono"
-import { getSignedCookie, setSignedCookie } from "hono/cookie"
+import { getSignedCookie, setCookie, setSignedCookie } from "hono/cookie"
 import { serveStatic } from "hono/bun"
 import { logger } from "hono/logger"
 import { cors } from "hono/cors"
@@ -77,6 +77,7 @@ app.get("/index.js", serveStatic({ path: "./index.js" }))
 app.get("/", serveStatic({ path: "./index.html" }))
 
 app.post("/api/v2/:projectId/register/options", async (c) => {
+    console.log("register options")
     const { username } = await c.req.json<{ username: string }>()
 
     const projectId = c.req.param("projectId")
@@ -114,10 +115,11 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
     console.timeEnd("set")
 
     console.time("setSignedCookie")
+
     await setSignedCookie(c, "userId", userID, SECRET, {
         httpOnly: true,
         secure: true,
-        sameSite: "None",
+        sameSite: "Lax",
         path: "/",
         maxAge: CHALLENGE_TTL
     })
@@ -185,7 +187,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
         await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
             httpOnly: true,
             secure: true,
-            sameSite: "None",
+            sameSite: "Lax",
             path: "/",
             maxAge: 600_000
         })
@@ -284,7 +286,7 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
         await setSignedCookie(c, "token", await generateJWT(userId), SECRET, {
             httpOnly: true,
             secure: true,
-            sameSite: "None",
+            sameSite: "Lax",
             path: "/",
             maxAge: 600_000
         })
