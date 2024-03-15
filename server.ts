@@ -136,7 +136,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
     const pubKey = cred.response.publicKey!
 
     const userId = await getSignedCookie(c, SECRET, "userId")
-    if (!userId) return new Response("Unauthorized", { status: 401 })
+    if (!userId) return new Response("UserId not found", { status: 401 })
 
     const domainName = await passkeyRepo.getPasskeyDomainByProjectId(
         c.req.param("projectId")
@@ -238,7 +238,7 @@ app.post("/api/v2/:projectId/login/verify", async (c) => {
     }
 
     const userId = cred.response.userHandle
-    if (!userId) return c.json({ error: "Unauthorized" }, { status: 401 })
+    if (!userId) return c.json({ error: "UserId Not Found" }, { status: 401 })
 
     const user = await passkeyRepo.getPasskeyUserById(userId)
     const credential = await passkeyRepo.getCredentialById(cred.id)
