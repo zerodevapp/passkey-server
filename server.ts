@@ -680,7 +680,10 @@ app.post("/api/v3/:projectId/sign-verify", async (c) => {
         await domainNameCache.set(projectId, domainName)
     }
 
-    const { cred } = await c.req.json<{ cred: AuthenticationResponseJSON }>()
+    const { cred, userId } = await c.req.json<{
+        cred: AuthenticationResponseJSON
+        userId: string
+    }>()
     const clientData = JSON.parse(atob(cred.response.clientDataJSON))
     const challenge = await passkeyRepo.get<string>([
         "challenges",
@@ -689,10 +692,10 @@ app.post("/api/v3/:projectId/sign-verify", async (c) => {
     ])
     if (!challenge) return c.text("Invalid challenge", 400)
 
-    const user = await passkeyRepo.getPasskeyUserById(
-        cred.response.userHandle as string
-    )
+    const userHandle = cred.response.userHandle || userId
+    const user = await passkeyRepo.getPasskeyUserById(userHandle as string)
     if (!user) return c.text("User Not Found", 401)
+
     const credential = await passkeyRepo.getCredentialById(cred.id)
     if (!credential) return c.text("Credentials Not Found", 401)
 
