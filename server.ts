@@ -18,6 +18,7 @@ import { v4 as uuidv4 } from "uuid"
 import PasskeyRepository from "./src/repository/PasskeyRepository"
 import { Challenge } from "./src/types"
 import { InMemoryCache } from "./src/cache/inMemoryCache"
+import { registerV4Routes } from "./src/routes/v4"
 
 // CONSTANTS
 const SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "development")
@@ -741,6 +742,9 @@ app.post("/api/v3/:projectId/sign-verify", async (c) => {
         return c.text("Unauthorized", 401)
     }
 })
+
+// v4 routes
+registerV4Routes(app, passkeyRepo, CHALLENGE_TTL)
 
 // health check
 app.get("/health", (c) => c.json({ status: "ok" }))
