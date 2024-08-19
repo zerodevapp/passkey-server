@@ -134,70 +134,75 @@ export function registerV4Routes(
     })
 
     app.post("/api/v4/login/verify", async (c) => {
-        const domainName = getDomainName(c)
-        if (!domainName) return c.text("Origin header is missing", 400)
+        try {
+            const domainName = getDomainName(c)
+            if (!domainName) return c.text("Origin header is missing", 400)
 
-        const { cred } = await c.req.json<{
-            cred: AuthenticationResponseJSON
-        }>()
+            const { cred } = await c.req.json<{
+                cred: AuthenticationResponseJSON
+            }>()
 
-        const clientData = JSON.parse(atob(cred.response.clientDataJSON))
+            const clientData = JSON.parse(atob(cred.response.clientDataJSON))
 
-        const clientDataJSON = atob(cred.response.clientDataJSON)
-        if (typeof clientDataJSON !== "string") {
-            throw new Error("clientDataJSON must be a string")
-        }
-
-        const userId = cred.response.userHandle
-        if (!userId)
-            return c.json({ error: "UserId Not Found" }, { status: 401 })
-
-        const credential = await passkeyRepo.getCredentialById(cred.id)
-        if (!credential)
-            return c.json({ error: "Unauthorized" }, { status: 401 })
-
-        const challenge = await passkeyRepo.get<Challenge>([
-            "challenges",
-            domainName,
-            clientData.challenge
-        ])
-        if (!challenge) {
-            return c.text("Invalid challenge", 400)
-        }
-
-        // Convert from Base64url to Uint8Array
-        const credentialID = base64urlToUint8Array(
-            credential.credentialId as string
-        )
-        const credentialPublicKey = base64urlToUint8Array(
-            credential.publicKey as string
-        )
-
-        const verification = await verifyAuthenticationResponse({
-            response: cred,
-            expectedChallenge: clientData.challenge,
-            expectedOrigin: c.req.header("origin")!, //! Allow from any origin
-            expectedRPID: domainName,
-            authenticator: {
-                ...credential,
-                credentialID: credentialID,
-                credentialPublicKey: credentialPublicKey
+            const clientDataJSON = atob(cred.response.clientDataJSON)
+            if (typeof clientDataJSON !== "string") {
+                throw new Error("clientDataJSON must be a string")
             }
-        })
 
-        if (verification.verified) {
-            const { newCounter } = verification.authenticationInfo
+            const userId = cred.response.userHandle
+            if (!userId)
+                return c.json({ error: "UserId Not Found" }, { status: 401 })
 
-            await passkeyRepo.delete(["challenges", clientData.challenge])
+            const credential = await passkeyRepo.getCredentialById(cred.id)
+            if (!credential)
+                return c.json({ error: "Unauthorized" }, { status: 401 })
 
-            await passkeyRepo.updateCredentialCounter(cred.id, newCounter)
+            const challenge = await passkeyRepo.get<Challenge>([
+                "challenges",
+                domainName,
+                clientData.challenge
+            ])
+            if (!challenge) {
+                return c.text("Invalid challenge", 400)
+            }
 
-            return c.json({
-                verification,
-                pubkey: credential.pubKey,
-                userId
+            // Convert from Base64url to Uint8Array
+            const credentialID = base64urlToUint8Array(
+                credential.credentialId as string
+            )
+            const credentialPublicKey = base64urlToUint8Array(
+                credential.publicKey as string
+            )
+
+            const verification = await verifyAuthenticationResponse({
+                response: cred,
+                expectedChallenge: clientData.challenge,
+                expectedOrigin: c.req.header("origin")!, //! Allow from any origin
+                expectedRPID: domainName,
+                authenticator: {
+                    ...credential,
+                    credentialID: credentialID,
+                    credentialPublicKey: credentialPublicKey
+                }
             })
+
+            if (verification.verified) {
+                const { newCounter } = verification.authenticationInfo
+
+                await passkeyRepo.delete(["challenges", clientData.challenge])
+
+                await passkeyRepo.updateCredentialCounter(cred.id, newCounter)
+
+                return c.json({
+                    verification,
+                    pubkey: credential.pubKey,
+                    userId
+                })
+            }
+            return c.text("Unauthorized", 401)
+        } catch (error) {
+            console.error(error)
+            return c.text("Internal Server Error", 500)
         }
-        return c.text("Unauthorized", 401)
     })
 }
