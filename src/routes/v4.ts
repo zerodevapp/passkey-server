@@ -37,7 +37,6 @@ export function registerV4Routes(
     app.post("/api/v4/register/options", async (c) => {
         const { username } = await c.req.json<{ username: string }>()
         const domainName = await getDomainName(c)
-        console.log(`register/options: domainName=${domainName}`)
         if (!domainName) return c.text("Origin header is missing", 400)
 
         const userId = uuidv4()
