@@ -19,7 +19,14 @@ export function registerV4Routes(
     passkeyRepo: PasskeyRepository,
     CHALLENGE_TTL: number
 ) {
-    const getDomainName = (c: Context) => {
+    const getDomainName = async (c: Context) => {
+        const { rpID } = await c.req.json<{ rpID?: string }>()
+        // if there is custom rpID, use it first.
+        if (rpID) {
+            console.log(`getDomainName: rpID=${rpID}`)
+            return rpID
+        }
+        // use origin header at default
         const origin = c.req.header("origin")
         if (!origin) {
             return null
@@ -29,7 +36,7 @@ export function registerV4Routes(
 
     app.post("/api/v4/register/options", async (c) => {
         const { username } = await c.req.json<{ username: string }>()
-        const domainName = getDomainName(c)
+        const domainName = await getDomainName(c)
         if (!domainName) return c.text("Origin header is missing", 400)
 
         const userId = uuidv4()
@@ -65,7 +72,7 @@ export function registerV4Routes(
 
         if (!userId) return new Response("UserId Not Found", { status: 401 })
 
-        const domainName = getDomainName(c)
+        const domainName = await getDomainName(c)
         if (!domainName) return c.text("Origin header is missing", 400)
 
         const clientData = JSON.parse(atob(cred.response.clientDataJSON))
@@ -114,7 +121,7 @@ export function registerV4Routes(
     })
 
     app.post("/api/v4/login/options", async (c) => {
-        const domainName = getDomainName(c)
+        const domainName = await getDomainName(c)
         if (!domainName) return c.text("Origin header is missing", 400)
 
         const options = await generateAuthenticationOptions({
@@ -135,7 +142,7 @@ export function registerV4Routes(
 
     app.post("/api/v4/login/verify", async (c) => {
         try {
-            const domainName = getDomainName(c)
+            const domainName = await getDomainName(c)
             if (!domainName) return c.text("Origin header is missing", 400)
 
             const { cred } = await c.req.json<{
