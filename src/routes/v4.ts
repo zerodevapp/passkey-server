@@ -20,11 +20,14 @@ export function registerV4Routes(
     CHALLENGE_TTL: number
 ) {
     const getDomainName = async (c: Context) => {
-        const { rpID } = await c.req.json<{ rpID?: string }>()
+        let rpID: string | undefined;
+        if (c.req.raw.body) {
+            const body = await c.req.json<{ rpID?: string }>()
+            rpID = body.rpID
+        }
         // if there is custom rpID, use it first.
         if (rpID) {
-            console.log(`getDomainName: rpID=${rpID}`)
-            return rpID
+            return rpID;
         }
         // use origin header at default
         const origin = c.req.header("origin")
