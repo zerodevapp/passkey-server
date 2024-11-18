@@ -19,14 +19,9 @@ const interceptors = [
 
 const db = createPool(process.env.DB_URL!, {
     interceptors,
-    ssl:
-        process.env.NODE_ENV === "development"
-            ? {
-                  rejectUnauthorized: false
-              }
-            : {
-                  rejectUnauthorized: true
-              }
+    ssl: {
+        rejectUnauthorized: false
+    }
 })
 
 export const sql = createSqlTag({
