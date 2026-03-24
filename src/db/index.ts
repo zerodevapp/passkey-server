@@ -19,7 +19,7 @@ const interceptors = [
 
 const db = createPool(process.env.DB_URL!, {
     interceptors,
-    ssl: {
+    ssl: process.env.IS_PGCAT === 'true' ? undefined : {
         rejectUnauthorized: false
     }
 })
