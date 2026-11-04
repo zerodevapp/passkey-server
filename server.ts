@@ -102,7 +102,9 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         authenticatorSelection: {
             residentKey: "required",
             userVerification: "required"
-        }
+        },
+        // ES256 (P-256) only: the Kernel passkey validator can't use other keys
+        supportedAlgorithmIDs: [-7]
     })
 
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
@@ -144,7 +146,9 @@ app.post("/api/v3/:projectId/register/options", async (c) => {
         authenticatorSelection: {
             residentKey: "required",
             userVerification: "required"
-        }
+        },
+        // ES256 (P-256) only: the Kernel passkey validator can't use other keys
+        supportedAlgorithmIDs: [-7]
     })
 
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
@@ -196,10 +200,9 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
     if (verification.verified) {
         const { credentialID, credentialPublicKey, counter } =
             verification.registrationInfo!
-        // Browsers without getPublicKey() omit response.publicKey; rebuild it from the
-        // verified COSE key before writing anything, so a failure leaves no user behind.
-        const publicKey =
-            cred.response.publicKey ?? spkiFromCosePublicKey(credentialPublicKey)
+        // Derive pub_key from the verified COSE key, never the client's response.publicKey,
+        // and before writing anything, so a rejection leaves no user behind.
+        const publicKey = spkiFromCosePublicKey(credentialPublicKey)
         if (!publicKey) return c.text("Only P-256 passkeys are supported", 400)
 
         await passkeyRepo.delete(["challenges", clientData.challenge])
@@ -273,10 +276,9 @@ app.post("/api/v3/:projectId/register/verify", async (c) => {
     if (verification.verified) {
         const { credentialID, credentialPublicKey, counter } =
             verification.registrationInfo!
-        // Browsers without getPublicKey() omit response.publicKey; rebuild it from the
-        // verified COSE key before writing anything, so a failure leaves no user behind.
-        const publicKey =
-            cred.response.publicKey ?? spkiFromCosePublicKey(credentialPublicKey)
+        // Derive pub_key from the verified COSE key, never the client's response.publicKey,
+        // and before writing anything, so a rejection leaves no user behind.
+        const publicKey = spkiFromCosePublicKey(credentialPublicKey)
         if (!publicKey) return c.text("Only P-256 passkeys are supported", 400)
 
         await passkeyRepo.delete(["challenges", clientData.challenge])

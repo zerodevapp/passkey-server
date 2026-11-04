@@ -17,6 +17,6 @@ export function spkiFromCosePublicKey(cosePublicKey: Uint8Array): string | null 
     }
     const x = key.get(cose.COSEKEYS.x)
     const y = key.get(cose.COSEKEYS.y)
-    if (!x || !y) return null
+    if (x?.length !== 32 || y?.length !== 32) return null
     return isoBase64URL.fromBuffer(isoUint8Array.concat([P256_SPKI_PREFIX, x, y]))
 }
