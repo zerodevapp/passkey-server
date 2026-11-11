@@ -19,6 +19,7 @@ import PasskeyRepository from "./src/repository/PasskeyRepository"
 import { Challenge } from "./src/types"
 import { InMemoryCache } from "./src/cache/inMemoryCache"
 import { registerV4Routes } from "./src/routes/v4"
+import { spkiFromCosePublicKey } from "./src/utils/publicKey"
 
 // CONSTANTS
 const SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "development")
@@ -101,7 +102,9 @@ app.post("/api/v2/:projectId/register/options", async (c) => {
         authenticatorSelection: {
             residentKey: "required",
             userVerification: "required"
-        }
+        },
+        // ES256 (P-256) only: the Kernel passkey validator can't use other keys
+        supportedAlgorithmIDs: [-7]
     })
 
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
@@ -143,7 +146,9 @@ app.post("/api/v3/:projectId/register/options", async (c) => {
         authenticatorSelection: {
             residentKey: "required",
             userVerification: "required"
-        }
+        },
+        // ES256 (P-256) only: the Kernel passkey validator can't use other keys
+        supportedAlgorithmIDs: [-7]
     })
 
     passkeyRepo.set(["challenges", domainName, options.challenge], true, {
@@ -160,8 +165,6 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
         cred: RegistrationResponseJSON
     }>()
 
-    // base64url to Uint8Array
-    const pubKey = cred.response.publicKey!
 
     const userId = await getSignedCookie(c, SECRET, "userId")
     if (!userId) return new Response("UserId not found", { status: 401 })
@@ -197,6 +200,10 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
     if (verification.verified) {
         const { credentialID, credentialPublicKey, counter } =
             verification.registrationInfo!
+        // Derive pub_key from the verified COSE key, never the client's response.publicKey,
+        // and before writing anything, so a rejection leaves no user behind.
+        const publicKey = spkiFromCosePublicKey(credentialPublicKey)
+        if (!publicKey) return c.text("Only P-256 passkeys are supported", 400)
 
         await passkeyRepo.delete(["challenges", clientData.challenge])
 
@@ -209,7 +216,7 @@ app.post("/api/v2/:projectId/register/verify", async (c) => {
         await passkeyRepo.createCredential({
             userId,
             credentialId: uint8ArrayToBase64Url(credentialID),
-            publicKey: pubKey,
+            publicKey,
             counter,
             credentialPublicKey: uint8ArrayToBase64Url(credentialPublicKey)
         })
@@ -235,8 +242,6 @@ app.post("/api/v3/:projectId/register/verify", async (c) => {
         cred: RegistrationResponseJSON
     }>()
 
-    // base64url to Uint8Array
-    const pubKey = cred.response.publicKey!
 
     if (!userId) return new Response("UserId Not Found", { status: 401 })
 
@@ -271,6 +276,10 @@ app.post("/api/v3/:projectId/register/verify", async (c) => {
     if (verification.verified) {
         const { credentialID, credentialPublicKey, counter } =
             verification.registrationInfo!
+        // Derive pub_key from the verified COSE key, never the client's response.publicKey,
+        // and before writing anything, so a rejection leaves no user behind.
+        const publicKey = spkiFromCosePublicKey(credentialPublicKey)
+        if (!publicKey) return c.text("Only P-256 passkeys are supported", 400)
 
         await passkeyRepo.delete(["challenges", clientData.challenge])
 
@@ -283,7 +292,7 @@ app.post("/api/v3/:projectId/register/verify", async (c) => {
         await passkeyRepo.createCredential({
             userId,
             credentialId: uint8ArrayToBase64Url(credentialID),
-            publicKey: pubKey,
+            publicKey,
             counter,
             credentialPublicKey: uint8ArrayToBase64Url(credentialPublicKey)
         })

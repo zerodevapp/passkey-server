@@ -12,6 +12,7 @@ import { Context, Hono } from "hono"
 import { v4 as uuidv4 } from "uuid"
 import PasskeyRepository from "../repository/PasskeyRepository"
 import { base64urlToUint8Array, uint8ArrayToBase64Url } from "../utils"
+import { spkiFromCosePublicKey } from "../utils/publicKey"
 import { Challenge } from "../types"
 
 export function registerV4Routes(
@@ -53,7 +54,9 @@ export function registerV4Routes(
             authenticatorSelection: {
                 residentKey: "required",
                 userVerification: "required"
-            }
+            },
+            // ES256 (P-256) only: the Kernel passkey validator can't use other keys
+            supportedAlgorithmIDs: [-7]
         })
 
         passkeyRepo.set(["challenges", domainName, options.challenge], true, {
@@ -70,8 +73,6 @@ export function registerV4Routes(
             cred: RegistrationResponseJSON
         }>()
 
-        // base64url to Uint8Array
-        const pubKey = cred.response.publicKey!
 
         if (!userId) return new Response("UserId Not Found", { status: 401 })
 
@@ -100,6 +101,10 @@ export function registerV4Routes(
         if (verification.verified) {
             const { credentialID, credentialPublicKey, counter } =
                 verification.registrationInfo!
+            // Derive pub_key from the verified COSE key, never the client's response.publicKey,
+            // and before writing anything, so a rejection leaves no user behind.
+            const publicKey = spkiFromCosePublicKey(credentialPublicKey)
+            if (!publicKey) return c.text("Only P-256 passkeys are supported", 400)
 
             await passkeyRepo.delete(["challenges", clientData.challenge])
 
@@ -114,7 +119,7 @@ export function registerV4Routes(
                 userId,
                 credentialPublicKey: uint8ArrayToBase64Url(credentialPublicKey),
                 counter,
-                publicKey: pubKey
+                publicKey
             })
 
             return c.json(verification)
